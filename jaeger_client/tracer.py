@@ -1,31 +1,26 @@
 # Copyright (c) 2016 Uber Technologies, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
+# http://www.apache.org/licenses/LICENSE-2.0
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import absolute_import
 
+from builtins import object
 import socket
 
-import os
-import time
 import logging
+import os
 import random
+import time
 import six
 import opentracing
 from opentracing import Format, UnsupportedFormatException
@@ -36,23 +31,29 @@ from .codecs import TextCodec, ZipkinCodec, ZipkinSpanFormat, BinaryCodec
 from .span import Span, SAMPLED_FLAG, DEBUG_FLAG
 from .span_context import SpanContext
 from .thrift import ipv4_to_int
-from .metrics import Metrics
+from .metrics import Metrics, LegacyMetricsFactory
 from .utils import local_ip
 
 logger = logging.getLogger('jaeger_tracing')
 
 
 class Tracer(opentracing.Tracer):
+    """
+    N.B. metrics has been deprecated, use metrics_factory instead.
+    """
     def __init__(self, service_name, reporter, sampler, metrics=None,
+                 metrics_factory=None,
                  trace_id_header=constants.TRACE_ID_HEADER,
                  baggage_header_prefix=constants.BAGGAGE_HEADER_PREFIX,
                  debug_id_header=constants.DEBUG_ID_HEADER_KEY,
-                 one_span_per_rpc=True, extra_codecs=None):
+                 one_span_per_rpc=True, extra_codecs=None,
+                 tags=None):
         self.service_name = service_name
         self.reporter = reporter
         self.sampler = sampler
         self.ip_address = ipv4_to_int(local_ip())
-        self.metrics = metrics or Metrics()
+        self.metrics_factory = metrics_factory or LegacyMetricsFactory(metrics or Metrics())
+        self.metrics = TracerMetrics(self.metrics_factory)
         self.random = random.Random(time.time() * (os.getpid() or 1))
         self.debug_id_header = debug_id_header
         self.codecs = {
@@ -76,6 +77,8 @@ class Tracer(opentracing.Tracer):
         self.tags = {
             constants.JAEGER_VERSION_TAG_KEY: constants.JAEGER_CLIENT_VERSION,
         }
+        if tags:
+            self.tags.update(tags)
         self.one_span_per_rpc = one_span_per_rpc
         # noinspection PyBroadException
         try:
@@ -198,20 +201,20 @@ class Tracer(opentracing.Tracer):
 
     def _emit_span_metrics(self, span, join=False):
         if span.is_sampled():
-            self.metrics.count(Metrics.SPANS_SAMPLED, 1)
+            self.metrics.spans_sampled(1)
         else:
-            self.metrics.count(Metrics.SPANS_NOT_SAMPLED, 1)
+            self.metrics.spans_not_sampled(1)
         if not span.context.parent_id:
             if span.is_sampled():
                 if join:
-                    self.metrics.count(Metrics.TRACES_JOINED_SAMPLED, 1)
+                    self.metrics.traces_joined_sampled(1)
                 else:
-                    self.metrics.count(Metrics.TRACES_STARTED_SAMPLED, 1)
+                    self.metrics.traces_started_sampled(1)
             else:
                 if join:
-                    self.metrics.count(Metrics.TRACES_JOINED_NOT_SAMPLED, 1)
+                    self.metrics.traces_joined_not_sampled(1)
                 else:
-                    self.metrics.count(Metrics.TRACES_STARTED_NOT_SAMPLED, 1)
+                    self.metrics.traces_started_not_sampled(1)
         return span
 
     def report_span(self, span):
@@ -219,3 +222,21 @@ class Tracer(opentracing.Tracer):
 
     def random_id(self):
         return self.random.getrandbits(constants.MAX_ID_BITS)
+
+
+class TracerMetrics(object):
+    """Tracer specific metrics."""
+
+    def __init__(self, metrics_factory):
+        self.traces_started_sampled = \
+            metrics_factory.create_counter(name='jaeger.traces-started', tags={'sampled': 'true'})
+        self.traces_started_not_sampled = \
+            metrics_factory.create_counter(name='jaeger.traces-started', tags={'sampled': 'false'})
+        self.traces_joined_sampled = \
+            metrics_factory.create_counter(name='jaeger.traces-joined', tags={'sampled': 'true'})
+        self.traces_joined_not_sampled = \
+            metrics_factory.create_counter(name='jaeger.traces-joined', tags={'sampled': 'false'})
+        self.spans_sampled = \
+            metrics_factory.create_counter(name='jaeger.spans', tags={'sampled': 'true'})
+        self.spans_not_sampled = \
+            metrics_factory.create_counter(name='jaeger.spans', tags={'sampled': 'false'})

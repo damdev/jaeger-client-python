@@ -3,10 +3,31 @@
 History
 -------
 
-3.4.1 (unreleased)
+3.6.2 (unreleased)
 ------------------
 
 - Nothing changed yet.
+
+
+3.6.1 (2017-09-26)
+------------------
+
+- Fix bug when creating tracer with tags. (#80)
+
+
+3.6.0 (2017-09-26)
+------------------
+
+- Allow tracer constructor to accept optional tags argument.
+- Support `JAEGER_TAGS` environment variable and config for tracer tags.
+
+
+3.5.0 (2017-07-10)
+------------------
+
+- Add metrics factory and allow tags for metrics [#45]
+- Save baggage in span [#54]
+- Allow to override hostname for jaeger agent [#51]
 
 
 3.4.0 (2017-03-20)

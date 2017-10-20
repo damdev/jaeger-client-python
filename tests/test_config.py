@@ -1,26 +1,22 @@
 # Copyright (c) 2016 Uber Technologies, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
+# http://www.apache.org/licenses/LICENSE-2.0
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import absolute_import
+import os
 import unittest
 from jaeger_client import Config, ConstSampler, ProbabilisticSampler, RateLimitingSampler
+from jaeger_client.reporter import NullReporter
 
 
 class ConfigTests(unittest.TestCase):
@@ -36,6 +32,12 @@ class ConfigTests(unittest.TestCase):
         assert c.reporter_batch_size == 12345
         c = Config({}, service_name='x')
         assert c.reporter_batch_size == 10
+
+    def test_tags(self):
+        os.environ['JAEGER_TAGS'] = 'a=b,c=d'
+        c = Config({'tags': {'e': 'f'}}, service_name='x')
+        assert c.tags == {'a': 'b', 'c': 'd', 'e': 'f'}
+        c.create_tracer(NullReporter(), ConstSampler(True))
 
     def test_no_sampler(self):
         c = Config({}, service_name='x')
@@ -73,3 +75,10 @@ class ConfigTests(unittest.TestCase):
         c = Config({'sampler': {'type': 'bad-sampler'}}, service_name='x')
         with self.assertRaises(ValueError):
             c.sampler.is_sampled(0)
+
+    def test_agent_reporting_host(self):
+        c = Config({}, service_name='x')
+        assert c.local_agent_reporting_host == 'localhost'
+
+        c = Config({'local_agent': {'reporting_host': 'jaeger.local'}}, service_name='x')
+        assert c.local_agent_reporting_host == 'jaeger.local'

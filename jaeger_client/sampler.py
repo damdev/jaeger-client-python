@@ -1,29 +1,26 @@
 # Copyright (c) 2016 Uber Technologies, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
+# http://www.apache.org/licenses/LICENSE-2.0
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 from __future__ import absolute_import
 from __future__ import division
 from builtins import object
+import json
+from builtins import object
 from past.utils import old_div
 import logging
 import random
+import six
 import json
 import six
 
@@ -37,7 +34,7 @@ from .constants import (
     SAMPLER_TYPE_RATE_LIMITING,
     SAMPLER_TYPE_LOWER_BOUND,
 )
-from .metrics import Metrics
+from .metrics import Metrics, LegacyMetricsFactory
 from .utils import ErrorReporter
 from .rate_limiter import RateLimiter
 from jaeger_client.thrift_gen.sampling import (
@@ -331,7 +328,10 @@ class RemoteControlledSampler(Sampler):
             - sampling_refresh_interval: interval in seconds for polling
               for new strategy
             - logger:
-            - metrics: metrics facade, used to emit metrics on errors
+            - metrics: metrics facade, used to emit metrics on errors.
+                This parameter has been deprecated, please use
+                metrics_factory instead.
+            - metrics_factory: used to generate metrics for errors
             - error_reporter: ErrorReporter instance
             - max_operations: maximum number of unique operations the
               AdaptiveSampler will keep track of
@@ -345,9 +345,12 @@ class RemoteControlledSampler(Sampler):
         self.sampler = kwargs.get('init_sampler')
         self.sampling_refresh_interval = \
             kwargs.get('sampling_refresh_interval', DEFAULT_SAMPLING_INTERVAL)
-        self.metrics = kwargs.get('metrics', None) or Metrics()
+        self.metrics_factory = kwargs.get('metrics_factory', None) \
+            or LegacyMetricsFactory(kwargs.get('metrics', None) or Metrics())
+        self.sampler_errors = \
+            self.metrics_factory.create_counter('jaeger.sampler', {'error': 'true'})
         self.error_reporter = kwargs.get('error_reporter') or \
-            ErrorReporter(metrics=self.metrics)
+            ErrorReporter(Metrics())
         self.max_operations = kwargs.get('max_operations', DEFAULT_MAX_OPERATIONS)
 
         if self.sampler is None:
@@ -406,8 +409,8 @@ class RemoteControlledSampler(Sampler):
     def _sampling_request_callback(self, future):
         exception = future.exception()
         if exception:
+            self.sampler_errors(1)
             self.error_reporter.error(
-                Metrics.SAMPLER_ERRORS, 1,
                 'Fail to get sampling strategy from jaeger-agent: %s',
                 exception)
             return
@@ -416,8 +419,8 @@ class RemoteControlledSampler(Sampler):
         try:
             sampling_strategies_response = json.loads(response.body)
         except Exception as e:
+            self.sampler_errors(1)
             self.error_reporter.error(
-                Metrics.SAMPLER_ERRORS, 1,
                 'Fail to parse sampling strategy '
                 'from jaeger-agent: %s [%s]', e, response.body)
             return
@@ -433,8 +436,8 @@ class RemoteControlledSampler(Sampler):
                 else:
                     self._update_rate_limiting_or_probabilistic_sampler(response)
             except Exception as e:
+                self.sampler_errors(1)
                 self.error_reporter.error(
-                    Metrics.SAMPLER_ERRORS, 1,
                     'Fail to update sampler'
                     'from jaeger-agent: %s [%s]', e, response)
 

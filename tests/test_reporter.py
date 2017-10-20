@@ -1,25 +1,22 @@
 from __future__ import print_function
+from __future__ import print_function
 from builtins import range
 from builtins import object
 # Copyright (c) 2016 Uber Technologies, Inc.
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
+# http://www.apache.org/licenses/LICENSE-2.0
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from builtins import range
+from builtins import object
 import logging
 import time
 import collections
@@ -31,7 +28,7 @@ import jaeger_client.reporter
 
 from concurrent.futures import Future
 from jaeger_client import Span, SpanContext
-from jaeger_client.metrics import Metrics
+from jaeger_client.metrics import LegacyMetricsFactory, Metrics
 from jaeger_client.utils import ErrorReporter
 from tornado.ioloop import IOLoop
 from tornado.testing import AsyncTestCase, gen_test
@@ -120,13 +117,12 @@ FakeTrace = collections.namedtuple(
     'FakeTracer', ['ip_address', 'service_name'])
 
 
-class FakeMetrics(Metrics):
+class FakeMetricsFactory(LegacyMetricsFactory):
     def __init__(self):
-        super(FakeMetrics, self).__init__(
-            count=self._incr_count
+        super(FakeMetricsFactory, self).__init__(
+            Metrics(count=self._incr_count)
         )
         self.counters = {}
-        self.gauges = {}
 
     def _incr_count(self, key, value):
         self.counters[key] = value + self.counters.get(key, 0)
@@ -151,7 +147,7 @@ class ReporterTest(AsyncTestCase):
                             io_loop=IOLoop.current(),
                             batch_size=batch_size,
                             flush_interval=flush,
-                            metrics=FakeMetrics(),
+                            metrics_factory=FakeMetricsFactory(),
                             error_reporter=HardErrorReporter(),
                             queue_capacity=queue_cap)
         sender = FakeSender()
@@ -181,25 +177,27 @@ class ReporterTest(AsyncTestCase):
         assert 1 == len(sender.futures)
 
         # send after close
-        assert Metrics.REPORTER_DROPPED not in reporter.metrics.counters
+        span_dropped_key = 'jaeger.spans.dropped_true'
+        assert span_dropped_key not in reporter.metrics_factory.counters
         reporter.report_span(self._new_span('1'))
-        assert 1 == reporter.metrics.counters[Metrics.REPORTER_DROPPED]
+        assert 1 == reporter.metrics_factory.counters[span_dropped_key]
 
     @gen_test
     def test_submit_failure(self):
         reporter, sender = self._new_reporter(batch_size=1)
         reporter.error_reporter = ErrorReporter(
-            metrics=reporter.metrics, logger=logging.getLogger())
+            metrics=Metrics(), logger=logging.getLogger())
 
-        assert Metrics.REPORTER_FAILURE not in reporter.metrics.counters
+        reporter_failure_key = 'jaeger.spans.reported_false'
+        assert reporter_failure_key not in reporter.metrics_factory.counters
 
         # simulate exception in send
         reporter._send = mock.MagicMock(side_effect=ValueError())
         reporter.report_span(self._new_span('1'))
 
         yield self._wait_for(
-            lambda: Metrics.REPORTER_FAILURE in reporter.metrics.counters)
-        assert 1 == reporter.metrics.counters.get(Metrics.REPORTER_FAILURE)
+            lambda: reporter_failure_key in reporter.metrics_factory.counters)
+        assert 1 == reporter.metrics_factory.counters.get(reporter_failure_key)
 
         # silly test, for code coverage only
         yield reporter._submit([])
@@ -213,12 +211,13 @@ class ReporterTest(AsyncTestCase):
         assert 1 == len(sender.futures)
         # the consumer is blocked on a future, so won't drain the queue
         reporter.report_span(self._new_span('2'))
-        assert Metrics.REPORTER_DROPPED not in reporter.metrics.counters
+        span_dropped_key = 'jaeger.spans.dropped_true'
+        assert span_dropped_key not in reporter.metrics_factory.counters
         reporter.report_span(self._new_span('3'))
         yield self._wait_for(
-            lambda: Metrics.REPORTER_DROPPED in reporter.metrics.counters
+            lambda: span_dropped_key in reporter.metrics_factory.counters
         )
-        assert 1 == reporter.metrics.counters.get(Metrics.REPORTER_DROPPED)
+        assert 1 == reporter.metrics_factory.counters.get(span_dropped_key)
         # let it drain the queue
         sender.futures[0].set_result(1)
         yield self._wait_for(lambda: len(sender.futures) > 1)
